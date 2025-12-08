@@ -55,8 +55,8 @@ def clean_mixed_dates(date_str):
 
 def process_wsj_files():
     # 定义基础路径
-    # E:\金融数据科学_作业2
-    base_dir = Path(r"E:\金融数据科学_作业2")
+    # E:\Financial_Data_Science_HW2
+    base_dir = Path(r"E:\Financial_Data_Science_HW2")
 
     # 定义输入和输出路径
     input_dir = base_dir / "data" / "Raw_data" / "WSJ"
@@ -78,24 +78,41 @@ def process_wsj_files():
 
         try:
             # 1. 读取数据
-            # 假设 WSJ 文件默认的日期列名为 'Date'
+            # 添加 strip() 来处理列名中的空格问题
             df = pd.read_csv(file_path)
 
-            # 2. 检查是否有 'Date' 列
+            # 2. 清理所有列名（去除首尾空格）
+            df.columns = df.columns.str.strip()
+            print(f"列名清理后: {list(df.columns)}")
+
+            # 3. 检查是否有 'Date' 列（现在已清理空格）
             if 'Date' not in df.columns:
-                print(f"警告：文件 {file_name} 中未找到 'Date' 列，跳过日期清洗。")
+                # 尝试查找可能的日期列
+                possible_date_cols = [col for col in df.columns if 'date' in col.lower()]
+                if possible_date_cols:
+                    print(f"警告：未找到 'Date' 列，但找到可能的日期列: {possible_date_cols}")
+                    # 可以选择将第一个可能的日期列重命名为 'Date'
+                    # df.rename(columns={possible_date_cols[0]: 'Date'}, inplace=True)
+                print(f"跳过日期清洗。")
                 continue
 
-            # 3. 应用日期清洗函数
+            # 4. 应用日期清洗函数
             # 使用 .apply() 方法进行逐行清洗
             df['Date'] = df['Date'].apply(clean_mixed_dates)
 
-            # 4. 检查是否有解析失败的日期，并进行报告
-            failed_count = df['Date'].isna().sum() - df['Date'].isnull().sum()
+            # 5. 检查是否有解析失败的日期，并进行报告
+            # 注意：这里应该是 df['Date'].isna().sum()
+            failed_count = df['Date'].isna().sum()
             if failed_count > 0:
                 print(f"警告：有 {failed_count} 条日期数据清洗失败并被标记为 NaT。")
+                # 显示一些失败的例子
+                failed_examples = df[df['Date'].isna()]['Date'].head(3).index.tolist()
+                print(f"前几个失败的行索引: {failed_examples}")
 
-            # 5. 保存清洗后的数据
+            # 6. 将日期列设置为索引（可选）
+            # df.set_index('Date', inplace=True)
+
+            # 7. 保存清洗后的数据
             output_file_path = output_dir / file_name
             df.to_csv(output_file_path, index=False)
 
@@ -104,6 +121,8 @@ def process_wsj_files():
 
         except Exception as e:
             print(f"处理文件 {file_name} 时发生致命错误: {e}")
+            import traceback
+            traceback.print_exc()
 
     print(f"\n--- WSJ 数据处理完成。共处理 {processed_count} 个文件 ---")
 
