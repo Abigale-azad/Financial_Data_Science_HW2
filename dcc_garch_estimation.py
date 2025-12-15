@@ -1,20 +1,6 @@
 """
-DCC-GARCH模型估计脚本
-成员4任务：多变量DCC模型 (Q2 + Q3DCC)
-
-功能：
-1. 读取ETF和加密货币数据
-2. 计算对数收益率
-3. 筛选共同样本
-4. 估计DCC-GARCH模型
-5. 输出模型参数和结果
-"""
-
-"""
-依赖库安装说明：
-pip install arch pandas numpy
-
-如果arch库未安装，请运行: pip install arch
+DCC-GARCH模型估计
+用于估计多变量动态条件相关GARCH模型
 """
 
 import pandas as pd
@@ -23,97 +9,66 @@ from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
 
-# 检查并导入arch库
 try:
     from arch import arch_model
-    from arch.univariate import GARCH
     ARCH_AVAILABLE = True
 except ImportError:
     ARCH_AVAILABLE = False
-    print("警告: arch库未安装。请运行 'pip install arch' 安装该库。")
-    print("程序将无法执行DCC-GARCH估计。")
+    print("警告: arch库未安装，请运行: pip install arch")
 
-# ==============================================================================
-# 1. 数据读取和预处理函数
-# ==============================================================================
+try:
+    from scipy.optimize import minimize
+    from scipy.linalg import inv
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    print("警告: scipy库未安装，请运行: pip install scipy")
 
 def load_etf_data(file_path):
-    """
-    读取ETF数据并计算对数收益率
-    
-    参数:
-        file_path: CSV文件路径
-    
-    返回:
-        returns: 对数收益率序列（带日期索引）
-    """
+    """读取ETF数据并计算对数收益率"""
     print(f"\n正在读取: {file_path.name}")
     df = pd.read_csv(file_path)
     
-    # 确保Date列存在并转换为日期类型
-    if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        # 只保留日期部分（去除时间），确保格式一致
-        df['Date'] = df['Date'].dt.date
-        df['Date'] = pd.to_datetime(df['Date'])
-        df.set_index('Date', inplace=True)
-    else:
+    if 'Date' not in df.columns:
         raise ValueError(f"文件 {file_path.name} 中未找到Date列")
     
-    # 使用Close价格计算对数收益率
-    if 'Close' in df.columns:
-        prices = df['Close']
-        returns = np.log(prices / prices.shift(1)).dropna()
-        returns.name = file_path.stem.replace('HistoricalPrices_', '')
-        print(f"  数据范围: {returns.index.min()} 至 {returns.index.max()}")
-        print(f"  观测数量: {len(returns)}")
-        return returns
-    else:
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.date
+    df['Date'] = pd.to_datetime(df['Date'])
+    df.set_index('Date', inplace=True)
+    
+    if 'Close' not in df.columns:
         raise ValueError(f"文件 {file_path.name} 中未找到Close列")
+    
+    prices = df['Close']
+    returns = np.log(prices / prices.shift(1)).dropna()
+    returns.name = file_path.stem.replace('HistoricalPrices_', '')
+    print(f"  数据范围: {returns.index.min()} 至 {returns.index.max()}")
+    print(f"  观测数量: {len(returns)}")
+    return returns
 
 
 def load_crypto_data(file_path):
-    """
-    读取加密货币数据并计算对数收益率
-    
-    参数:
-        file_path: CSV文件路径
-    
-    返回:
-        returns: 对数收益率序列（带日期索引）
-    """
+    """读取加密货币数据并计算对数收益率"""
     print(f"\n正在读取: {file_path.name}")
     try:
-        # 加密货币数据使用分号分隔
         df = pd.read_csv(file_path, sep=';')
     except Exception as e:
         print(f"  错误: 无法读取文件: {str(e)}")
         raise
     
-    # 解析日期（使用timeOpen或timestamp列）
-    date_col = None
-    if 'timeOpen' in df.columns:
-        date_col = 'timeOpen'
-    elif 'timestamp' in df.columns:
-        date_col = 'timestamp'
-    else:
+    date_col = 'timeOpen' if 'timeOpen' in df.columns else 'timestamp'
+    if date_col not in df.columns:
         raise ValueError(f"文件 {file_path.name} 中未找到日期列")
     
-    # 清理日期字符串（移除引号）并解析
     date_str = df[date_col].astype(str).str.replace('"', '')
     df['Date'] = pd.to_datetime(date_str, errors='coerce', format='ISO8601')
     
-    # 如果ISO格式解析失败，尝试其他格式
     if df['Date'].isna().any():
-        # 尝试提取日期部分（YYYY-MM-DD）
         date_str_clean = date_str.str.extract(r'(\d{4}-\d{2}-\d{2})')[0]
         df['Date'] = pd.to_datetime(date_str_clean, errors='coerce')
     
-    # 只保留日期部分（去除时间），确保与ETF数据格式一致
-    df['Date'] = df['Date'].dt.date
+    df['Date'] = pd.to_datetime(df['Date']).dt.date
     df['Date'] = pd.to_datetime(df['Date'])
-    
-    # 删除日期解析失败的行
     df = df.dropna(subset=['Date'])
     
     if len(df) == 0:
@@ -122,113 +77,68 @@ def load_crypto_data(file_path):
     df.set_index('Date', inplace=True)
     df.sort_index(inplace=True)
     
-    # 使用close价格计算对数收益率
-    if 'close' in df.columns:
-        prices = pd.to_numeric(df['close'].astype(str).str.replace('"', ''), errors='coerce')
-        prices = prices.dropna()
-        
-        if len(prices) == 0:
-            raise ValueError(f"文件 {file_path.name} 中没有有效的价格数据")
-        
-        # 计算对数收益率
-        returns = np.log(prices / prices.shift(1)).dropna()
-        
-        # 检查收益率数据
-        if len(returns) == 0:
-            raise ValueError(f"文件 {file_path.name} 无法计算收益率")
-        
-        # 移除异常值（收益率绝对值大于1的）
-        returns = returns[np.abs(returns) <= 1.0]
-        
-        crypto_name = 'Bitcoin' if 'Bitcoin' in file_path.name else 'Ethereum'
-        returns.name = crypto_name
-        
-        print(f"  数据范围: {returns.index.min()} 至 {returns.index.max()}")
-        print(f"  观测数量: {len(returns)}")
-        print(f"  收益率统计: 均值={returns.mean():.6f}, 标准差={returns.std():.6f}")
-        
-        return returns
-    else:
+    if 'close' not in df.columns:
         raise ValueError(f"文件 {file_path.name} 中未找到close列")
+    
+    prices = pd.to_numeric(df['close'].astype(str).str.replace('"', ''), errors='coerce').dropna()
+    if len(prices) == 0:
+        raise ValueError(f"文件 {file_path.name} 中没有有效的价格数据")
+    
+    returns = np.log(prices / prices.shift(1)).dropna()
+    if len(returns) == 0:
+        raise ValueError(f"文件 {file_path.name} 无法计算收益率")
+    
+    returns = returns[np.abs(returns) <= 1.0]
+    crypto_name = 'Bitcoin' if 'Bitcoin' in file_path.name else 'Ethereum'
+    returns.name = crypto_name
+    
+    print(f"  数据范围: {returns.index.min()} 至 {returns.index.max()}")
+    print(f"  观测数量: {len(returns)}")
+    print(f"  收益率统计: 均值={returns.mean():.6f}, 标准差={returns.std():.6f}")
+    return returns
 
-
-# ==============================================================================
-# 2. 共同样本筛选函数
-# ==============================================================================
 
 def find_common_sample(*returns_series, names=None):
-    """
-    找出多个时间序列的共同样本
-    
-    参数:
-        *returns_series: 多个收益率序列
-        names: 序列名称列表（可选）
-    
-    返回:
-        common_data: DataFrame，包含共同样本数据
-        info: dict，包含共同样本信息
-    """
+    """找出多个时间序列的共同样本"""
     if names is None:
         names = [f"Asset_{i+1}" for i in range(len(returns_series))]
     
-    # 验证输入
     if len(returns_series) == 0:
         raise ValueError("至少需要一个收益率序列")
-    
     if len(returns_series) != len(names):
         raise ValueError("收益率序列数量与名称数量不匹配")
     
-    # 检查每个序列是否为空
     for i, ret in enumerate(returns_series):
         if len(ret) == 0:
             raise ValueError(f"序列 {names[i]} 为空")
-    
-    # 合并所有序列
-    combined = pd.DataFrame()
-    for i, ret in enumerate(returns_series):
         if not isinstance(ret, pd.Series):
             raise ValueError(f"序列 {names[i]} 不是pandas Series")
-        # 确保索引是日期类型
+    
+    combined = pd.DataFrame()
+    for i, ret in enumerate(returns_series):
         if not isinstance(ret.index, pd.DatetimeIndex):
             ret.index = pd.to_datetime(ret.index)
-        # 只保留日期部分（去除时间），确保格式一致
         ret.index = pd.to_datetime(ret.index.date)
         combined[names[i]] = ret
     
-    # 找出共同样本（删除任何包含NaN的行）
     common_data = combined.dropna()
     
-    # 确保索引是日期类型且已排序
     if len(common_data) > 0:
         common_data.index = pd.to_datetime(common_data.index)
         common_data = common_data.sort_index()
     
-    # 检查共同样本是否为空
     if len(common_data) == 0:
         print(f"\n警告: 资产 {', '.join(names)} 的共同样本为空")
-        print("可能原因:")
-        print("  - 时间索引没有重叠")
-        print("  - 数据中存在大量缺失值")
         for i, ret in enumerate(returns_series):
-            print(f"  - {names[i]}: {len(ret)} 个观测值, 日期范围 {ret.index.min()} 至 {ret.index.max()}")
+            print(f"  {names[i]}: {len(ret)} 个观测值, 日期范围 {ret.index.min()} 至 {ret.index.max()}")
     
-    # 生成信息字典
-    if len(common_data) > 0:
-        info = {
-            'start_date': common_data.index.min(),
-            'end_date': common_data.index.max(),
-            'n_obs': len(common_data),
-            'assets': names,
-            'original_lengths': {names[i]: len(returns_series[i]) for i in range(len(returns_series))}
-        }
-    else:
-        info = {
-            'start_date': None,
-            'end_date': None,
-            'n_obs': 0,
-            'assets': names,
-            'original_lengths': {names[i]: len(returns_series[i]) for i in range(len(returns_series))}
-        }
+    info = {
+        'start_date': common_data.index.min() if len(common_data) > 0 else None,
+        'end_date': common_data.index.max() if len(common_data) > 0 else None,
+        'n_obs': len(common_data),
+        'assets': names,
+        'original_lengths': {names[i]: len(returns_series[i]) for i in range(len(returns_series))}
+    }
     
     print(f"\n共同样本信息:")
     print(f"  资产: {', '.join(names)}")
@@ -244,21 +154,8 @@ def find_common_sample(*returns_series, names=None):
     return common_data, info
 
 
-# ==============================================================================
-# 3. DCC-GARCH模型估计函数
-# ==============================================================================
-
 def estimate_dcc_garch(returns_data, asset_names):
-    """
-    估计DCC-GARCH模型
-    
-    参数:
-        returns_data: DataFrame，包含共同样本的收益率数据
-        asset_names: 资产名称列表
-    
-    返回:
-        results: dict，包含估计结果
-    """
+    """估计DCC-GARCH模型"""
     if not ARCH_AVAILABLE:
         raise ImportError("arch库未安装，无法执行DCC-GARCH估计。请运行 'pip install arch'")
     
@@ -288,16 +185,13 @@ def estimate_dcc_garch(returns_data, asset_names):
         'assets': asset_names,
         'n_obs': len(returns_data),
         'marginal_garch': {},
-        'dcc_params': None,
-        'log_likelihood': None
+        'dcc_params': None
     }
     
-    # 第一阶段：估计边际GARCH模型
     print(f"\n第一阶段：估计边际GARCH(1,1)模型")
     print("-" * 60)
     
     standardized_residuals = pd.DataFrame(index=returns_data.index)
-    conditional_vols = pd.DataFrame(index=returns_data.index)
     
     for asset in asset_names:
         print(f"\n估计 {asset} 的GARCH(1,1)模型...")
@@ -310,16 +204,12 @@ def estimate_dcc_garch(returns_data, asset_names):
         if len(returns) < 100:
             print(f"  警告: 资产 {asset} 只有 {len(returns)} 个观测值，可能不足以估计GARCH模型")
         
-        # 检查数据是否全为0或NaN
         if returns.std() == 0 or np.isnan(returns.std()):
             raise ValueError(f"资产 {asset} 的收益率标准差为0或NaN，无法估计GARCH模型")
         
-        # 检查是否有异常值
         if np.any(np.abs(returns) > 1.0):
-            print(f"  警告: 资产 {asset} 存在绝对值大于1的收益率，可能影响估计结果")
+            print(f"  警告: 资产 {asset} 存在绝对值大于1的收益率")
         
-        # 估计GARCH(1,1)模型
-        # 注意：将收益率乘以100以提高数值稳定性
         try:
             model = arch_model(returns * 100, vol='Garch', p=1, q=1, rescale=False)
             fitted = model.fit(disp='off', show_warning=False)
@@ -329,12 +219,10 @@ def estimate_dcc_garch(returns_data, asset_names):
             print(f"  数据统计: 均值={returns.mean():.6f}, 标准差={returns.std():.6f}, 观测数={len(returns)}")
             raise
         
-        # 提取参数和显著性检验结果
         params = fitted.params
         tvalues = fitted.tvalues
         pvalues = fitted.pvalues
         
-        # 显著性标记函数
         def significance_marker(pval):
             if pd.isna(pval) or pval >= 1:
                 return ''
@@ -344,15 +232,12 @@ def estimate_dcc_garch(returns_data, asset_names):
                 return '**'
             elif pval < 0.10:
                 return '*'
-            else:
-                return ''
+            return ''
         
-        # 安全获取统计量（处理可能的键名差异）
         def safe_get(series, key, default=np.nan):
             try:
                 if key in series.index:
                     return series[key]
-                # 尝试不同的键名格式
                 for idx in series.index:
                     if key.replace('[', '').replace(']', '') in str(idx).replace('[', '').replace(']', ''):
                         return series[idx]
@@ -388,12 +273,9 @@ def estimate_dcc_garch(returns_data, asset_names):
             'bic': fitted.bic
         }
         
-        # 计算条件波动率和标准化残差
-        conditional_vol = fitted.conditional_volatility / 100  # 转换回原始尺度
-        conditional_vols[asset] = conditional_vol
+        conditional_vol = fitted.conditional_volatility / 100
         standardized_residuals[asset] = returns / conditional_vol
         
-        # 显示参数估计结果（带显著性检验）
         print(f"  参数估计结果:")
         print(f"  ω (omega): {params['omega']:.6f}  [t={omega_t:.3f}, p={omega_p:.4f}{significance_marker(omega_p)}]")
         print(f"  α (alpha): {params['alpha[1]']:.6f}  [t={alpha_t:.3f}, p={alpha_p:.4f}{significance_marker(alpha_p)}]")
@@ -405,83 +287,221 @@ def estimate_dcc_garch(returns_data, asset_names):
         print(f"  AIC: {fitted.aic:.2f}")
         print(f"  BIC: {fitted.bic:.2f}")
     
-    # 第二阶段：估计DCC参数
     print(f"\n第二阶段：估计DCC参数")
     print("-" * 60)
     
-    # 清理标准化残差
     standardized_residuals_clean = standardized_residuals.dropna()
     z = standardized_residuals_clean.values
+    T, n = z.shape
     
-    # 计算无条件相关矩阵（样本相关矩阵）
     R_bar = np.corrcoef(z.T)
     
-    # DCC参数估计（使用两步估计法）
-    # 第一步：计算无条件相关矩阵（已完成）
-    # 第二步：估计DCC参数 α_D 和 β_D
+    print("\n使用两步估计法估计DCC参数")
     
-    # 使用最大似然估计DCC参数
-    # 目标函数：最大化对数似然值
-    # L = -0.5 * sum(log|R_t| + z_t' * R_t^(-1) * z_t)
-    
-    # 简化方法：使用样本相关矩阵作为初始值
-    # 完整实现需要使用优化算法估计α_D和β_D
-    
-    print("\n使用两步估计法估计DCC参数：")
-    print("  步骤1: 估计无条件相关矩阵 R_bar (已完成)")
-    print("  步骤2: 估计DCC参数 α_D 和 β_D")
-    print("\n注意：完整DCC估计需要使用优化算法")
-    print("这里提供基于样本相关矩阵的简化结果")
-    
-    # 计算平均相关系数
     if n_assets == 2:
         avg_corr = R_bar[0, 1]
     else:
-        # 对于多资产，计算所有非对角线元素的平均值
         mask = ~np.eye(n_assets, dtype=bool)
         avg_corr = np.mean(R_bar[mask])
     
-    # 尝试使用简化方法估计DCC参数
-    # 这里使用样本相关矩阵的衰减率作为近似
-    # 实际应用中应使用最大似然估计
+    def dcc_loglikelihood(params, z, R_bar):
+        """DCC模型的对数似然函数"""
+        alpha_D, beta_D = params
+        
+        if alpha_D < 0 or beta_D < 0 or alpha_D + beta_D >= 1:
+            return 1e10
+        
+        T, n = z.shape
+        Q = np.zeros((T, n, n))
+        Q[0] = R_bar.copy()
+        
+        for t in range(1, T):
+            Q[t] = (1 - alpha_D - beta_D) * R_bar + \
+                   alpha_D * np.outer(z[t-1], z[t-1]) + \
+                   beta_D * Q[t-1]
+        
+        loglik = 0.0
+        for t in range(T):
+            Qt = Q[t]
+            try:
+                diag_Qt = np.diag(Qt)
+                diag_Qt = np.maximum(diag_Qt, 1e-8)
+                diag_Qt_inv_sqrt = 1.0 / np.sqrt(diag_Qt)
+                D_inv = np.diag(diag_Qt_inv_sqrt)
+                Rt = D_inv @ Qt @ D_inv
+                Rt = (Rt + Rt.T) / 2
+                
+                eigenvals = np.linalg.eigvals(Rt)
+                if np.any(eigenvals <= 0):
+                    return 1e10
+                
+                try:
+                    det_Rt = np.linalg.det(Rt)
+                    if det_Rt <= 0:
+                        return 1e10
+                    
+                    inv_Rt = np.linalg.inv(Rt)
+                    zt = z[t]
+                    loglik += 0.5 * (np.log(det_Rt) + zt @ inv_Rt @ zt - zt @ zt)
+                except np.linalg.LinAlgError:
+                    return 1e10
+            except Exception:
+                return 1e10
+        
+        return loglik
     
-    # 计算动态相关系数的时变特征（简化）
-    # 使用滚动窗口计算时变相关性
-    window_size = min(60, len(standardized_residuals_clean) // 4)
-    if window_size >= 20:
-        rolling_corr = standardized_residuals_clean.rolling(window=window_size).corr()
-        # 提取平均时变相关性
-        if n_assets == 2:
-            corr_series = rolling_corr.iloc[::n_assets, 1].dropna()
-            if len(corr_series) > 0:
-                corr_std = corr_series.std()
-                corr_mean = corr_series.mean()
+    if SCIPY_AVAILABLE:
+        print("\n开始最大似然估计...")
+        
+        initial_params = [0.02, 0.95]
+        bounds = [(1e-6, 0.5), (1e-6, 0.999)]
+        constraints = {
+            'type': 'ineq',
+            'fun': lambda x: 1 - x[0] - x[1] - 1e-6
+        }
+        
+        try:
+            result = minimize(
+                dcc_loglikelihood,
+                initial_params,
+                args=(z, R_bar),
+                method='L-BFGS-B',
+                bounds=bounds,
+                options={'maxiter': 1000, 'ftol': 1e-6, 'disp': False}
+            )
+            
+            if result.success:
+                alpha_D_est = result.x[0]
+                beta_D_est = result.x[1]
+                
+                from scipy.linalg import inv as inv_matrix
+                
+                try:
+                    def loglik_wrapper(p):
+                        return dcc_loglikelihood(p, z, R_bar)
+                    
+                    eps = 1e-5
+                    hessian = np.zeros((2, 2))
+                    f_0 = result.fun
+                    
+                    for i in range(2):
+                        params_plus = result.x.copy()
+                        params_plus[i] += eps
+                        f_plus = loglik_wrapper(params_plus)
+                        
+                        params_minus = result.x.copy()
+                        params_minus[i] -= eps
+                        f_minus = loglik_wrapper(params_minus)
+                        
+                        hessian[i, i] = (f_plus - 2 * f_0 + f_minus) / (eps * eps)
+                    
+                    for i in range(2):
+                        for j in range(i + 1, 2):
+                            params_pp = result.x.copy()
+                            params_pp[i] += eps
+                            params_pp[j] += eps
+                            f_pp = loglik_wrapper(params_pp)
+                            
+                            params_pm = result.x.copy()
+                            params_pm[i] += eps
+                            params_pm[j] -= eps
+                            f_pm = loglik_wrapper(params_pm)
+                            
+                            params_mp = result.x.copy()
+                            params_mp[i] -= eps
+                            params_mp[j] += eps
+                            f_mp = loglik_wrapper(params_mp)
+                            
+                            params_mm = result.x.copy()
+                            params_mm[i] -= eps
+                            params_mm[j] -= eps
+                            f_mm = loglik_wrapper(params_mm)
+                            
+                            hessian[i, j] = (f_pp - f_pm - f_mp + f_mm) / (4 * eps * eps)
+                            hessian[j, i] = hessian[i, j]
+                    
+                    eigenvals = np.linalg.eigvals(hessian)
+                    if np.any(eigenvals <= 0):
+                        min_eigenval = np.min(eigenvals)
+                        if min_eigenval <= 0:
+                            hessian += np.eye(2) * (abs(min_eigenval) + 1e-6)
+                    
+                    try:
+                        cov_matrix = inv_matrix(hessian)
+                        if np.any(np.diag(cov_matrix) <= 0):
+                            raise ValueError("协方差矩阵的对角线元素必须为正")
+                        
+                        std_errors = np.sqrt(np.diag(cov_matrix))
+                        alpha_D_se = std_errors[0]
+                        beta_D_se = std_errors[1]
+                        
+                        alpha_D_tstat = alpha_D_est / alpha_D_se if alpha_D_se > 0 else np.nan
+                        beta_D_tstat = beta_D_est / beta_D_se if beta_D_se > 0 else np.nan
+                        
+                        from scipy.stats import norm
+                        alpha_D_pvalue = 2 * (1 - norm.cdf(abs(alpha_D_tstat))) if not np.isnan(alpha_D_tstat) else np.nan
+                        beta_D_pvalue = 2 * (1 - norm.cdf(abs(beta_D_tstat))) if not np.isnan(beta_D_tstat) else np.nan
+                    except Exception:
+                        alpha_D_se = beta_D_se = alpha_D_tstat = beta_D_tstat = np.nan
+                        alpha_D_pvalue = beta_D_pvalue = np.nan
+                except Exception:
+                    alpha_D_se = beta_D_se = alpha_D_tstat = beta_D_tstat = np.nan
+                    alpha_D_pvalue = beta_D_pvalue = np.nan
+                
+                print(f"  优化成功，迭代次数: {result.nit}")
+                
+                results['dcc_params'] = {
+                    'alpha_D': alpha_D_est,
+                    'beta_D': beta_D_est,
+                    'alpha_D_se': alpha_D_se,
+                    'beta_D_se': beta_D_se,
+                    'alpha_D_tstat': alpha_D_tstat,
+                    'beta_D_tstat': beta_D_tstat,
+                    'alpha_D_pvalue': alpha_D_pvalue,
+                    'beta_D_pvalue': beta_D_pvalue,
+                    'average_correlation': avg_corr,
+                    'correlation_matrix': R_bar,
+                    'log_likelihood': -result.fun,
+                    'note': 'DCC参数通过最大似然估计得到'
+                }
+                
+                print(f"\nDCC参数估计结果:")
+                print(f"  α_D: {alpha_D_est:.6f}")
+                if not np.isnan(alpha_D_se):
+                    print(f"    (标准误: {alpha_D_se:.6f}, t={alpha_D_tstat:.3f}, p={alpha_D_pvalue:.4f})")
+                print(f"  β_D: {beta_D_est:.6f}")
+                if not np.isnan(beta_D_se):
+                    print(f"    (标准误: {beta_D_se:.6f}, t={beta_D_tstat:.3f}, p={beta_D_pvalue:.4f})")
+                print(f"  α_D + β_D: {alpha_D_est + beta_D_est:.6f}")
+                print(f"  对数似然值: {-result.fun:.2f}")
+                
             else:
-                corr_std = 0
-                corr_mean = avg_corr
-        else:
-            corr_std = 0
-            corr_mean = avg_corr
+                print(f"  警告: 优化未成功，消息: {result.message}")
+                raise ValueError("优化失败")
+                
+        except Exception as e:
+            print(f"  警告: DCC估计失败: {str(e)}")
+            alpha_D_est = 0.02
+            beta_D_est = 0.95
+            
+            results['dcc_params'] = {
+                'alpha_D': alpha_D_est,
+                'beta_D': beta_D_est,
+                'alpha_D_se': np.nan,
+                'beta_D_se': np.nan,
+                'alpha_D_tstat': np.nan,
+                'beta_D_tstat': np.nan,
+                'alpha_D_pvalue': np.nan,
+                'beta_D_pvalue': np.nan,
+                'average_correlation': avg_corr,
+                'correlation_matrix': R_bar,
+                'log_likelihood': np.nan,
+                'note': 'DCC参数估计失败，使用默认值'
+            }
     else:
-        corr_std = 0
-        corr_mean = avg_corr
+        raise ImportError("完整DCC估计需要scipy库，请运行: pip install scipy")
     
-    # 简化的DCC参数（基于经验规则）
-    # 注意：这不是真正的DCC参数估计，只是近似值
-    alpha_d_approx = min(0.05, corr_std * 2) if corr_std > 0 else 0.02
-    beta_d_approx = max(0.90, 1 - alpha_d_approx - 0.05)
-    
-    results['dcc_params'] = {
-        'alpha_D': alpha_d_approx,
-        'beta_D': beta_d_approx,
-        'average_correlation': avg_corr,
-        'correlation_matrix': R_bar,
-        'note': 'DCC参数为近似值。完整估计需要使用arch.multivariate.DCC或优化算法'
-    }
-    
-    print(f"  α_D (近似值): {alpha_d_approx:.4f}")
-    print(f"  β_D (近似值): {beta_d_approx:.4f}")
-    print(f"  平均相关系数: {avg_corr:.4f}")
+    print(f"\n  平均相关系数: {avg_corr:.4f}")
     print(f"  无条件相关矩阵:")
     corr_df = pd.DataFrame(R_bar, index=asset_names, columns=asset_names)
     print(corr_df.round(4))
@@ -489,19 +509,8 @@ def estimate_dcc_garch(returns_data, asset_names):
     return results
 
 
-# ==============================================================================
-# 4. 结果展示和保存函数
-# ==============================================================================
-
 def display_results(results, common_sample_info, combination_name):
-    """
-    展示估计结果
-    
-    参数:
-        results: 估计结果字典
-        common_sample_info: 共同样本信息
-        combination_name: 组合名称
-    """
+    """展示估计结果"""
     print(f"\n{'='*60}")
     print(f"结果汇总: {combination_name}")
     print(f"{'='*60}")
@@ -514,10 +523,15 @@ def display_results(results, common_sample_info, combination_name):
     print("-" * 60)
     marginal_data = []
     for asset, params in results['marginal_garch'].items():
-        # 显著性标记
-        omega_sig = '***' if params.get('omega_pvalue', 1) < 0.01 else ('**' if params.get('omega_pvalue', 1) < 0.05 else ('*' if params.get('omega_pvalue', 1) < 0.10 else ''))
-        alpha_sig = '***' if params.get('alpha_pvalue', 1) < 0.01 else ('**' if params.get('alpha_pvalue', 1) < 0.05 else ('*' if params.get('alpha_pvalue', 1) < 0.10 else ''))
-        beta_sig = '***' if params.get('beta_pvalue', 1) < 0.01 else ('**' if params.get('beta_pvalue', 1) < 0.05 else ('*' if params.get('beta_pvalue', 1) < 0.10 else ''))
+        def sig_marker(pval):
+            if pval < 0.01: return '***'
+            if pval < 0.05: return '**'
+            if pval < 0.10: return '*'
+            return ''
+        
+        omega_sig = sig_marker(params.get('omega_pvalue', 1))
+        alpha_sig = sig_marker(params.get('alpha_pvalue', 1))
+        beta_sig = sig_marker(params.get('beta_pvalue', 1))
         
         marginal_data.append({
             '资产': asset,
@@ -543,26 +557,47 @@ def display_results(results, common_sample_info, combination_name):
     print("-" * 60)
     if results['dcc_params']:
         dcc_params = results['dcc_params']
-        print(f"  α_D: {dcc_params.get('alpha_D', 'N/A'):.4f}" if 'alpha_D' in dcc_params else "  α_D: N/A")
-        print(f"  β_D: {dcc_params.get('beta_D', 'N/A'):.4f}" if 'beta_D' in dcc_params else "  β_D: N/A")
-        print(f"  平均相关系数: {dcc_params['average_correlation']:.4f}")
-        print(f"  注意: {dcc_params['note']}")
+        
+        alpha_D = dcc_params.get('alpha_D', np.nan)
+        beta_D = dcc_params.get('beta_D', np.nan)
+        alpha_D_se = dcc_params.get('alpha_D_se', np.nan)
+        beta_D_se = dcc_params.get('beta_D_se', np.nan)
+        alpha_D_tstat = dcc_params.get('alpha_D_tstat', np.nan)
+        beta_D_tstat = dcc_params.get('beta_D_tstat', np.nan)
+        alpha_D_pvalue = dcc_params.get('alpha_D_pvalue', np.nan)
+        beta_D_pvalue = dcc_params.get('beta_D_pvalue', np.nan)
+        log_likelihood = dcc_params.get('log_likelihood', np.nan)
+        
+        def sig_marker(pval):
+            if np.isnan(pval): return ''
+            if pval < 0.01: return '***'
+            if pval < 0.05: return '**'
+            if pval < 0.10: return '*'
+            return ''
+        
+        alpha_sig = sig_marker(alpha_D_pvalue)
+        beta_sig = sig_marker(beta_D_pvalue)
+        
+        print(f"  α_D: {alpha_D:.6f}{alpha_sig}")
+        if not np.isnan(alpha_D_se):
+            print(f"    (标准误: {alpha_D_se:.6f}, t统计量: {alpha_D_tstat:.3f}, p值: {alpha_D_pvalue:.4f})")
+        print(f"  β_D: {beta_D:.6f}{beta_sig}")
+        if not np.isnan(beta_D_se):
+            print(f"    (标准误: {beta_D_se:.6f}, t统计量: {beta_D_tstat:.3f}, p值: {beta_D_pvalue:.4f})")
+        if not np.isnan(alpha_D) and not np.isnan(beta_D):
+            print(f"  α_D + β_D: {alpha_D + beta_D:.6f}")
+        if not np.isnan(log_likelihood):
+            print(f"  对数似然值: {log_likelihood:.2f}")
+        print(f"  平均相关系数: {dcc_params.get('average_correlation', np.nan):.4f}")
+        print(f"  注意: {dcc_params.get('note', '')}")
+        print("\n显著性标记: *** p<0.01, ** p<0.05, * p<0.10")
 
 
 def save_results(results, common_sample_info, combination_name, output_dir):
-    """
-    保存结果到CSV文件
-    
-    参数:
-        results: 估计结果字典
-        common_sample_info: 共同样本信息
-        combination_name: 组合名称
-        output_dir: 输出目录
-    """
+    """保存结果到CSV文件"""
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True)
     
-    # 保存边际GARCH参数（包含显著性检验，T值紧跟在对应参数后面）
     marginal_data = []
     for asset, params in results['marginal_garch'].items():
         marginal_data.append({
@@ -589,7 +624,6 @@ def save_results(results, common_sample_info, combination_name, output_dir):
     marginal_df.to_csv(marginal_file, index=False, encoding='utf-8-sig')
     print(f"\n边际GARCH参数已保存至: {marginal_file}")
     
-    # 保存共同样本信息
     sample_info_df = pd.DataFrame([{
         '组合名称': combination_name,
         '开始日期': common_sample_info['start_date'],
@@ -601,26 +635,61 @@ def save_results(results, common_sample_info, combination_name, output_dir):
     sample_info_file = output_dir / f"{combination_name}_common_sample_info.csv"
     sample_info_df.to_csv(sample_info_file, index=False, encoding='utf-8-sig')
     print(f"共同样本信息已保存至: {sample_info_file}")
+    
+    if results['dcc_params']:
+        dcc_params = results['dcc_params']
+        dcc_data = {
+            '参数': ['alpha_D', 'beta_D'],
+            '估计值': [
+                dcc_params.get('alpha_D', np.nan),
+                dcc_params.get('beta_D', np.nan)
+            ],
+            '标准误': [
+                dcc_params.get('alpha_D_se', np.nan),
+                dcc_params.get('beta_D_se', np.nan)
+            ],
+            't统计量': [
+                dcc_params.get('alpha_D_tstat', np.nan),
+                dcc_params.get('beta_D_tstat', np.nan)
+            ],
+            'p值': [
+                dcc_params.get('alpha_D_pvalue', np.nan),
+                dcc_params.get('beta_D_pvalue', np.nan)
+            ]
+        }
+        
+        if 'log_likelihood' in dcc_params:
+            dcc_data['对数似然值'] = [dcc_params['log_likelihood'], np.nan]
+        if 'average_correlation' in dcc_params:
+            dcc_data['平均相关系数'] = [dcc_params['average_correlation'], np.nan]
+        
+        dcc_df = pd.DataFrame(dcc_data)
+        dcc_file = output_dir / f"{combination_name}_dcc_params.csv"
+        dcc_df.to_csv(dcc_file, index=False, encoding='utf-8-sig')
+        print(f"DCC参数已保存至: {dcc_file}")
+        
+        if 'correlation_matrix' in dcc_params:
+            corr_matrix = dcc_params['correlation_matrix']
+            corr_df = pd.DataFrame(
+                corr_matrix,
+                index=results['assets'],
+                columns=results['assets']
+            )
+            corr_file = output_dir / f"{combination_name}_unconditional_correlation_matrix.csv"
+            corr_df.to_csv(corr_file, index=True, encoding='utf-8-sig')
+            print(f"无条件相关矩阵已保存至: {corr_file}")
 
-
-# ==============================================================================
-# 5. 主程序：Q2任务
-# ==============================================================================
 
 def run_q2_analysis():
-    """
-    执行Q2任务：ETF资产组合的DCC-GARCH估计
-    """
+    """执行Q2任务：ETF资产组合的DCC-GARCH估计"""
     print("\n" + "="*80)
     print("Q2任务：ETF资产组合的DCC-GARCH估计")
     print("="*80)
     
-    # 定义路径
     base_path = Path(__file__).parent
     data_path = base_path / "data" / "Processed_data" / "WSJ"
     output_path = base_path / "results" / "Q2"
     
-    # 读取ETF数据
     print("\n读取ETF数据...")
     spy = load_etf_data(data_path / "HistoricalPrices_S&P 500 SPDR.csv")
     iwm = load_etf_data(data_path / "HistoricalPrices_Russell 2000 ETF.csv")
@@ -628,14 +697,13 @@ def run_q2_analysis():
     ewh = load_etf_data(data_path / "HistoricalPrices_MSCI Hong Kong ETF.csv")
     ewu = load_etf_data(data_path / "HistoricalPrices_MSCI United Kingdom ETF.csv")
     
-    # Q2.1: 2个资产对的DCC-GARCH估计
     print("\n" + "="*80)
     print("Q2.1: 估计2个资产对的DCC-GARCH模型")
     print("="*80)
     
     pairs = [
-        (spy, iwm, "SPY-IWM"),  # (a) S&P 500 SPDR ETF and Russell 2000 iShares ETF
-        (ewg, ewu, "EWG-EWU")   # (b) iShares MSCI Germany and iShares MSCI UK
+        (spy, iwm, "SPY-IWM"),
+        (ewg, ewu, "EWG-EWU")
     ]
     
     q2_results = {}
@@ -643,31 +711,24 @@ def run_q2_analysis():
     for asset1, asset2, pair_name in pairs:
         print(f"\n处理资产对: {pair_name}")
         try:
-            # 筛选共同样本
             common_data, sample_info = find_common_sample(
                 asset1, asset2,
                 names=[asset1.name, asset2.name]
             )
             
-            # 检查共同样本是否为空
             if common_data.empty:
                 print(f"  错误: {pair_name} 的共同样本为空，跳过该组合")
                 continue
             
             if len(common_data) < 50:
-                print(f"  警告: {pair_name} 的共同样本只有 {len(common_data)} 个观测值，可能不足以估计模型")
+                print(f"  警告: {pair_name} 的共同样本只有 {len(common_data)} 个观测值")
             
-            # 估计DCC-GARCH
             results = estimate_dcc_garch(common_data, [asset1.name, asset2.name])
         except Exception as e:
             print(f"  错误: 处理 {pair_name} 时发生错误: {str(e)}")
-            print(f"  跳过该组合，继续处理下一个...")
             continue
         
-        # 展示结果
         display_results(results, sample_info, pair_name)
-        
-        # 保存结果
         save_results(results, sample_info, pair_name, output_path)
         
         q2_results[pair_name] = {
@@ -675,39 +736,33 @@ def run_q2_analysis():
             'sample_info': sample_info
         }
     
-    # Q2.2: 1组4个资产的DCC-GARCH估计
     print("\n" + "="*80)
     print("Q2.2: 估计4个ETF资产的DCC-GARCH模型")
     print("="*80)
-    print("资产组合: S&P 500 SPDR ETF, iShares MSCI Germany, iShares MSCI Hong Kong, iShares MSCI UK")
-    print("即: SPY, EWG, EWH, EWU")
     
-    print("\n处理4资产组合: SPY, EWG, EWH, EWU")
     try:
-        # 筛选共同样本
         common_data_4, sample_info_4 = find_common_sample(
             spy, ewg, ewh, ewu,
             names=['SPY', 'EWG', 'EWH', 'EWU']
         )
         
-        # 检查共同样本是否为空
         if common_data_4.empty:
             print("  错误: 4资产组合的共同样本为空，跳过该组合")
+            results_4 = None
+            sample_info_4 = None
         elif len(common_data_4) < 50:
-            print(f"  警告: 4资产组合的共同样本只有 {len(common_data_4)} 个观测值，可能不足以估计模型")
+            print(f"  警告: 4资产组合的共同样本只有 {len(common_data_4)} 个观测值")
+            results_4 = None
+            sample_info_4 = None
         else:
-            # 估计DCC-GARCH
             results_4 = estimate_dcc_garch(common_data_4, ['SPY', 'EWG', 'EWH', 'EWU'])
     except Exception as e:
         print(f"  错误: 处理4资产组合时发生错误: {str(e)}")
         results_4 = None
         sample_info_4 = None
     
-    # 展示结果
     if results_4 is not None:
         display_results(results_4, sample_info_4, "SPY-EWG-EWH-EWU")
-        
-        # 保存结果
         save_results(results_4, sample_info_4, "SPY-EWG-EWH-EWU", output_path)
     
     print("\n" + "="*80)
@@ -717,35 +772,25 @@ def run_q2_analysis():
     return q2_results, results_4, sample_info_4
 
 
-# ==============================================================================
-# 6. 主程序：Q3任务
-# ==============================================================================
-
 def run_q3_analysis():
-    """
-    执行Q3任务：加密货币与ETF的DCC-GARCH估计
-    """
+    """执行Q3任务：加密货币与ETF的DCC-GARCH估计"""
     print("\n" + "="*80)
     print("Q3任务：加密货币与ETF的DCC-GARCH估计")
     print("="*80)
     
-    # 定义路径
     base_path = Path(__file__).parent
     etf_path = base_path / "data" / "Processed_data" / "WSJ"
     crypto_path = base_path / "data" / "Raw_data" / "coin"
     output_path = base_path / "results" / "Q3"
     
-    # 读取ETF数据
     print("\n读取ETF数据...")
     spy = load_etf_data(etf_path / "HistoricalPrices_S&P 500 SPDR.csv")
     iwm = load_etf_data(etf_path / "HistoricalPrices_Russell 2000 ETF.csv")
     
-    # 读取加密货币数据
     print("\n读取加密货币数据...")
     bitcoin = load_crypto_data(crypto_path / "Bitcoin_2024_12_8-2025_12_8_historical_data_coinmarketcap.csv")
     ethereum = load_crypto_data(crypto_path / "Ethereum_2024_12_8-2025_12_8_historical_data_coinmarketcap.csv")
     
-    # Q3: 3组DCC-GARCH估计
     print("\n" + "="*80)
     print("Q3: 估计3组DCC-GARCH模型")
     print("="*80)
@@ -761,31 +806,24 @@ def run_q3_analysis():
     for asset1, asset2, combo_name in combinations:
         print(f"\n处理组合: {combo_name}")
         try:
-            # 筛选共同样本
             common_data, sample_info = find_common_sample(
                 asset1, asset2,
                 names=[asset1.name, asset2.name]
             )
             
-            # 检查共同样本是否为空
             if common_data.empty:
                 print(f"  错误: {combo_name} 的共同样本为空，跳过该组合")
                 continue
             
             if len(common_data) < 50:
-                print(f"  警告: {combo_name} 的共同样本只有 {len(common_data)} 个观测值，可能不足以估计模型")
+                print(f"  警告: {combo_name} 的共同样本只有 {len(common_data)} 个观测值")
             
-            # 估计DCC-GARCH
             results = estimate_dcc_garch(common_data, [asset1.name, asset2.name])
         except Exception as e:
             print(f"  错误: 处理 {combo_name} 时发生错误: {str(e)}")
-            print(f"  跳过该组合，继续处理下一个...")
             continue
         
-        # 展示结果
         display_results(results, sample_info, combo_name)
-        
-        # 保存结果
         save_results(results, sample_info, combo_name, output_path)
         
         q3_results[combo_name] = {
@@ -800,41 +838,24 @@ def run_q3_analysis():
     return q3_results
 
 
-# ==============================================================================
-# 7. 主函数
-# ==============================================================================
-
 def main():
-    """
-    主函数：执行所有DCC-GARCH估计任务
-    """
+    """主函数：执行所有DCC-GARCH估计任务"""
     print("\n" + "="*80)
-    print("DCC-GARCH模型估计 - 成员4任务")
+    print("DCC-GARCH模型估计")
     print("="*80)
     
     if not ARCH_AVAILABLE:
-        print("\n错误: arch库未安装")
-        print("请运行以下命令安装: pip install arch")
+        print("\n错误: arch库未安装，请运行: pip install arch")
         return
     
     try:
-        # 执行Q2任务
-        q2_results = run_q2_analysis()
-        
-        # 执行Q3任务
-        q3_results = run_q3_analysis()
+        run_q2_analysis()
+        run_q3_analysis()
         
         print("\n" + "="*80)
         print("所有任务完成！")
         print("="*80)
         print("\n结果文件已保存至 results/ 目录")
-        print("\n生成的文件包括:")
-        print("  - Q2/ 目录: ETF资产组合的估计结果")
-        print("  - Q3/ 目录: 加密货币组合的估计结果")
-        print("  - 每个组合包含:")
-        print("    * _marginal_garch_params.csv: 边际GARCH参数")
-        print("    * _common_sample_info.csv: 共同样本信息")
-        
     except Exception as e:
         print(f"\n错误: {str(e)}")
         import traceback
