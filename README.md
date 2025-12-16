@@ -1,76 +1,206 @@
+# 金融数据科学作业2 - GARCH与DCC-GARCH模型分析
 
+## 📋 项目概述
 
----
+本项目对ETF和加密货币资产进行波动率建模与动态相关性分析，主要内容包括：
 
-## README: 金融数据科学作业 2
+- **Q2**: ETF资产组合的GARCH(1,1)和DCC-GARCH模型估计
+- **Q3**: 加密货币（Bitcoin、Ethereum）与传统ETF的GARCH(1,1)和DCC动态相关性分析
 
-### 1. 项目简介 (Project Overview) 
+## 📁 项目结构
 
-本项目是为了完成 **金融数据科学作业 2**，主要任务是利用 GARCH 类模型（包括 GARCH(1,1)、GJR-GARCH(1,1) 和 EGARCH(1,1)）以及多变量 GARCH 模型（DCC-GARCH）对不同 ETF 和加密货币的日回报率进行波动率估计和预测 [cite: 22, 23, 30, 32, 34]。
+```
+Financial_Data_Science_HW2/
+├── README.md                           # 项目说明文档
+├── complete_analysis.py                # 完整分析脚本（Q2 + Q3综合）
+├── q3_crypto_analysis.py               # Q3加密货币专项分析脚本
+├── dcc_garch_estimation.py             # DCC-GARCH模型估计核心脚本
+├── process_wsj_data.py                 # WSJ数据预处理脚本
+├── COMPREHENSIVE_ANALYSIS_REPORT.txt   # 综合分析报告
+│
+├── data/
+│   ├── Processed_data/
+│   │   └── WSJ/                        # 处理后的ETF数据
+│   │       ├── HistoricalPrices_MSCI Germany ETF.csv
+│   │       ├── HistoricalPrices_MSCI Hong Kong ETF.csv
+│   │       ├── HistoricalPrices_MSCI United Kingdom ETF.csv
+│   │       ├── HistoricalPrices_Russell 2000 ETF.csv
+│   │       └── HistoricalPrices_S&P 500 SPDR.csv
+│   └── Raw_data/
+│       ├── coin/                       # 加密货币原始数据
+│       │   ├── Bitcoin_*.csv
+│       │   └── Ethereum_*.csv
+│       ├── vlab/                       # V-Lab GARCH模型数据
+│       └── WSJ/                        # WSJ原始数据
+│
+├── figures/                            # 生成的图表
+│   ├── Q3_Bitcoin_conditional_variance.png
+│   ├── Q3_Ethereum_conditional_variance.png
+│   ├── Q3_SPY-Bitcoin_DCC_correlation.png
+│   ├── Q3_IWM-Bitcoin_DCC_correlation.png
+│   ├── Q3_Bitcoin-Ethereum_DCC_correlation.png
+│   └── ...
+│
+└── results/
+    ├── Q2/                             # Q2 ETF分析结果
+    │   ├── EWG-EWU_marginal_garch_params.csv
+    │   ├── SPY-EWG-EWH-EWU_marginal_garch_params.csv
+    │   ├── SPY-IWM_marginal_garch_params.csv
+    │   └── *_common_sample_info.csv
+    └── Q3/                             # Q3 加密货币分析结果
+        ├── crypto_garch_params.csv
+        ├── dcc_correlation_summary.csv
+        └── *_marginal_garch_params.csv
+```
 
-代码文件 `process_wsj_data.py`用于数据预处理，修复 WSJ 历史价格数据中的混合日期格式错误。
+## 🔧 环境依赖
 
-### 2. 目录结构说明 (Directory Structure) 
+### Python版本
+- Python >= 3.8
 
-项目根目录位于 `E:\金融数据科学_作业2`。
+### 依赖库
+```bash
+pip install pandas numpy matplotlib arch
+```
 
-| 路径 | 描述 |
-| :--- | :--- |
-| **./** | **E:\金融数据科学\_作业2**：项目根目录，包含主要的 Python 脚本和配置文件。 |
-| **data/** | 包含所有原始数据和处理后的数据。 |
-| **data/Raw\_data/** | 原始数据的存放目录，按数据来源细分。 |
-| **data/Raw\_data/WSJ/** | 包含从华尔街日报（WSJ）获取的 ETF 历史价格数据。 |
-| **data/Raw\_data/vlab/** | 包含从 NYU Stern Vlab 获取的 GARCH/EGARCH/GJR-GARCH 模型估计结果文件，用于结果比对和参考。 |
-| **data/Raw\_data/coin/** | 包含从 CoinMarketCap 获取的加密货币历史数据。 |
-| **data/Processed\_data/** | 存放经过日期清洗和回报率计算等预处理步骤后的最终数据文件。 |
-| **process_wsj_data.py** | **数据清洗脚本**：用于处理 `data/Raw_data/WSJ/` 中 CSV 文件的混合日期格式问题。 |
+| 库名 | 用途 |
+|------|------|
+| `pandas` | 数据处理与分析 |
+| `numpy` | 数值计算 |
+| `matplotlib` | 图表绘制 |
+| `arch` | GARCH模型估计 |
 
----
+## 🚀 使用方法
 
-### 3. 数据文件介绍 (Data File Descriptions) 
+### 1. 数据预处理
+```bash
+python process_wsj_data.py
+```
+- 清洗WSJ原始数据中的日期格式问题
+- 输出处理后的CSV文件到 `data/Processed_data/WSJ/`
 
-根据原始数据来源，数据文件被分为三类：
+### 2. 完整分析（Q2 + Q3）
+```bash
+python complete_analysis.py
+```
+- 估计所有资产组合的边际GARCH(1,1)模型
+- 计算DCC动态条件相关性
+- 生成条件方差和动态相关性图表
+- 输出综合分析报告
 
-#### A. WSJ (华尔街日报) 数据
+### 3. Q3加密货币专项分析
+```bash
+python q3_crypto_analysis.py
+```
+- 估计Bitcoin和Ethereum的GARCH(1,1)模型
+- 计算加密货币条件方差
+- 计算SPY-Bitcoin、IWM-Bitcoin、Bitcoin-Ethereum的DCC相关性
+- 生成专项图表
 
-[cite_start]这些文件是从华尔街日报（WSJ）网页上爬取的 ETF 历史价格数据 [cite: 8, 9, 10, 12, 13, 14]。它们是进行 GARCH 模型估计的基础数据。
+### 4. DCC-GARCH核心估计
+```bash
+python dcc_garch_estimation.py
+```
+- 提供DCC-GARCH模型的核心估计功能
 
-| 文件名 | 对应 ETF | 作业对应问题 |
-| :--- | :--- | :--- |
-| **HistoricalPrices\_S&P 500                                  | S&P 500 SPDR ETF                                | Q1, Q2, Q3 |
-| **HistoricalPrices\_Russell 2000 ETF.csv** | [cite_start]Russell 2000 iShares ETF [cite: 10] | Q1, Q2, Q3 |
-| [cite_start]**HistoricalPrices\_MSCI Germany ETF.csv** | iShares MSCI Germany [cite: 11] | Q1, Q2 |
-| [cite_start]**HistoricalPrices\_MSCI Hong Kong ETF.csv** | iShares MSCI Hong Kong [cite: 13] | Q1, Q2 |
-| [cite_start]**HistoricalPrices\_MSCI United Kingdom ETF.csv** | iShares MSCI UK [cite: 14] | Q1, Q2 |
+## 📊 主要结果
 
----
+### Q2: ETF资产组合GARCH(1,1)参数
 
-#### B. Vlab (NYU Stern Vlab) 数据
+| 资产组合 | 资产 | ω (omega) | α (alpha) | β (beta) | 持久性 (α+β) |
+|---------|------|-----------|-----------|----------|-------------|
+| EWG-EWU | MSCI Germany ETF | 0.0334 | 0.0857 | 0.9019 | 0.9876 |
+| EWG-EWU | MSCI UK ETF | 0.0387 | 0.1070 | 0.8744 | 0.9814 |
+| SPY-IWM | S&P 500 SPDR | 0.0263 | 0.1245 | 0.8554 | 0.9799 |
+| SPY-IWM | Russell 2000 ETF | 0.0410 | 0.0893 | 0.8902 | 0.9795 |
 
-文件包含了从 Vlab 获得的 GARCH 族模型的**预估结果**，用于与我们在 Python 中实现的模型结果进行比较和验证。文件名以 **`YYYYMMDD`** 开头（例如 `20251205`），后跟资产名称和模型类型 (`GARCH`, `EGARCH`, `GJR-GARCH`)。
+### Q3: 加密货币GARCH(1,1)参数
 
-| 文件名示例 | 资产名称 | 模型类型 | 样本范围 |
-| :--- | :--- | :--- | :--- |
-| `*_iShares安硕罗素2000 ETF_GARCH_*.csv` | Russell 2000 iShares ETF | [cite_start]GARCH(1,1) [cite: 22] | 2000-05-30 至 2025-12-05 |
-| `*_MSCI德国指数ETF_EGARCH_*.csv` | iShares MSCI Germany | [cite_start]EGARCH(1,1) [cite: 23] | 1996-04-02 至 2025-12-05 |
+| 资产 | ω (omega) | α (alpha) | β (beta) | 持久性 (α+β) | 样本期 |
+|------|-----------|-----------|----------|-------------|--------|
+| Bitcoin | 0.1699 | 0.0513 | 0.9141 | 0.9654 | 2024-11-04 ~ 2025-12-06 |
+| Ethereum | 7.7470 | 0.0758 | 0.4295 | 0.5052 | 2024-11-04 ~ 2025-12-06 |
 
----
+### Q3: DCC动态相关性分析
 
-#### C. Coin (加密货币) 数据
+| 资产对 | 无条件相关 | 动态相关均值 | 动态相关标准差 | 最小值 | 最大值 |
+|--------|-----------|-------------|---------------|--------|--------|
+| SPY-Bitcoin | -0.0813 | -0.0820 | 0.1013 | -0.3222 | 0.2175 |
+| IWM-Bitcoin | -0.0422 | -0.0378 | 0.1086 | -0.2925 | 0.2342 |
+| Bitcoin-Ethereum | **0.8138** | **0.8055** | 0.0732 | 0.6046 | 0.9335 |
 
-这些文件包含两种主流加密货币的历史价格，用于 Q3 的 GARCH 模型估计 。
+### 共同样本信息
 
-| 文件名 | 对应加密货币 | 作业对应问题 |
-| :--- | :--- | :--- |
-| **Bitcoin\_2024\_12\_8-2025\_12\_8\_historical\_data\_coinmarketcap.csv** | Bitcoin (BTC) | Q3 |
-| **Ethereum\_2024\_12\_8-2025\_12\_8\_historical\_data\_coinmarketcap.csv** | Ethereum (ETH) | Q3 |
+| 资产组合 | 样本期 | 观测数 |
+|---------|--------|--------|
+| EWG-EWU | 1996-03-18 ~ 2025-12-04 | 7,406 |
+| SPY-EWG-EWH-EWU | 1996-03-18 ~ 2025-12-04 | 7,404 |
+| SPY-IWM | 2000-05-26 ~ 2025-12-04 | 6,420 |
+| Bitcoin-Ethereum | 2024-11-04 ~ 2025-12-06 | 398 |
+| SPY-Bitcoin | 2024-11-04 ~ 2025-12-04 | 272 |
+| IWM-Bitcoin | 2024-11-04 ~ 2025-12-04 | 272 |
 
----
+## 📈 生成的图表
 
-### 4. 代码说明 (Code Description) 
+### Q3 条件方差图
+- `Q3_Bitcoin_conditional_variance.png` - Bitcoin GARCH(1,1)条件方差时序图
+- `Q3_Ethereum_conditional_variance.png` - Ethereum GARCH(1,1)条件方差时序图
 
-* `process_wsj_data.py`：
-    * **作用**：执行数据预处理。
-    * **核心功能**：读取 `data/Raw_data/WSJ/` 目录下的所有 CSV 文件，应用自定义的 `clean_mixed_dates` 函数修复其中**混合的日期格式**，并将清洗后的文件保存到 `data/Processed_data/WSJ/` 目录下。
+### Q3 DCC动态相关性图
+- `Q3_SPY-Bitcoin_DCC_correlation.png` - S&P 500与Bitcoin的动态相关性
+- `Q3_IWM-Bitcoin_DCC_correlation.png` - Russell 2000与Bitcoin的动态相关性
+- `Q3_Bitcoin-Ethereum_DCC_correlation.png` - Bitcoin与Ethereum的动态相关性
 
-* **主分析脚本** 
+## 🔬 模型说明
+
+### GARCH(1,1)模型
+
+$$r_t = \mu + \epsilon_t$$
+
+$$\epsilon_t = \sigma_t z_t, \quad z_t \sim N(0,1)$$
+
+$$\sigma_t^2 = \omega + \alpha \epsilon_{t-1}^2 + \beta \sigma_{t-1}^2$$
+
+其中：
+- $\omega > 0$：常数项
+- $\alpha \geq 0$：ARCH效应（冲击持续性）
+- $\beta \geq 0$：GARCH效应（波动率持续性）
+- $\alpha + \beta < 1$：平稳性条件
+
+### DCC-GARCH模型
+
+两阶段估计：
+1. **第一阶段**：对每个资产估计边际GARCH模型，得到标准化残差
+2. **第二阶段**：基于标准化残差估计动态条件相关系数
+
+$$Q_t = (1 - a - b)\bar{Q} + a(z_{t-1}z_{t-1}') + bQ_{t-1}$$
+
+$$R_t = \text{diag}(Q_t)^{-1/2} Q_t \text{diag}(Q_t)^{-1/2}$$
+
+## 📝 关键发现
+
+1. **模型平稳性**：所有GARCH(1,1)模型均通过平稳性检验（$\alpha + \beta < 1$）
+
+2. **波动率聚集效应**：
+   - 传统ETF的$\alpha$值普遍在0.08-0.12之间，表现出明显的波动率聚集
+   - Bitcoin的$\alpha$较低（0.05），但$\beta$很高（0.91），波动率持续性强
+
+3. **资产相关性**：
+   - **Bitcoin与传统ETF（SPY、IWM）呈弱负相关**，可能具有分散化效益
+   - **Bitcoin与Ethereum高度正相关**（ρ ≈ 0.81），表明加密货币市场联动性强
+
+4. **Ethereum特殊性**：Ethereum的GARCH持久性较低（0.51），波动率模式与Bitcoin显著不同
+
+## 📚 数据来源
+
+- **ETF数据**：Wall Street Journal (WSJ)
+- **加密货币数据**：CoinMarketCap
+- **V-Lab数据**：NYU V-Lab（GARCH、EGARCH、GJR-GARCH模型参考）
+
+## 👥 作者
+
+Financial Data Science HW2 Team
+
+## 📄 许可证
+
+本项目仅用于学术研究目的。
